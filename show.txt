@@ -1,0 +1,6 @@
+backend: npm run dev
+frontend: npm start
+
+test account:
+test@example.com
+password123
