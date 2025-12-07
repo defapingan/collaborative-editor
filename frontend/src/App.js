@@ -1,131 +1,133 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
+
+// 组件导入
 import Login from './components/Login';
 import Register from './components/Register';
-import DocumentList from './components/DocumentList';
+import Dashboard from './components/Dashboard';
 import Editor from './components/Editor';
-import './App.css';
+import MyDocuments from './components/MyDocuments';
+import SharedWithMe from './components/SharedWithMe';
+import SharingWithOthers from './components/SharingWithOthers';
+import ManageDocuments from './components/ManageDocuments';
+
+// 创建主题
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#1e3a8a',
+      light: '#3b82f6',
+      dark: '#1e40af',
+    },
+    secondary: {
+      main: '#7c3aed',
+      light: '#8b5cf6',
+      dark: '#6d28d9',
+    },
+    error: {
+      main: '#dc2626',
+    },
+    warning: {
+      main: '#f59e0b',
+    },
+    success: {
+      main: '#10b981',
+    },
+    info: {
+      main: '#0ea5e9',
+    },
+    background: {
+      default: '#f8fafc',
+      paper: '#ffffff',
+    },
+  },
+  typography: {
+    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+    h4: {
+      fontWeight: 700,
+    },
+    h6: {
+      fontWeight: 600,
+    },
+  },
+  shape: {
+    borderRadius: 8,
+  },
+  components: {
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 500,
+        },
+      },
+    },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 1px 3px 0 rgb(0 0 0 / 0.1)',
+        },
+      },
+    },
+  },
+});
+
+// 私有路由组件 - 修复版
+const PrivateRoute = ({ children }) => {
+  const token = localStorage.getItem('authToken'); // 修改为authToken
+  
+  console.log('PrivateRoute检查:', { 
+    token: token,
+    hasToken: !!token,
+    path: window.location.pathname 
+  });
+  
+  if (token) {
+    return children;
+  } else {
+    console.log('没有token，重定向到login');
+    return <Navigate to="/login" />;
+  }
+};
 
 function App() {
-    const [currentView, setCurrentView] = useState('login');
-    const [user, setUser] = useState(null);
-    const [selectedDocument, setSelectedDocument] = useState(null);
-    const [systemStatus, setSystemStatus] = useState({ backend: 'checking', frontend: 'running' });
-
-    useEffect(() => {
-        const savedUser = localStorage.getItem('user');
-        const token = localStorage.getItem('authToken');
-        
-        if (savedUser && token) {
-            setUser(JSON.parse(savedUser));
-            setCurrentView('documents');
-        }
-
-        checkBackendStatus();
-    }, []);
-
-    const checkBackendStatus = async () => {
-        try {
-            const response = await fetch('http://localhost:3001');
-            const data = await response.json();
-            setSystemStatus({ backend: 'online', frontend: 'running', message: data.message });
-        } catch (error) {
-            setSystemStatus({ backend: 'offline', frontend: 'running', error: 'Cannot connect to backend' });
-        }
-    };
-
-    const handleLogin = (userData) => {
-        setUser(userData);
-        setCurrentView('documents');
-    };
-
-    const handleRegister = (userData) => {
-        setUser(userData);
-        setCurrentView('documents');
-    };
-
-    const handleLogout = () => {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user');
-        setUser(null);
-        setSelectedDocument(null);
-        setCurrentView('login');
-    };
-
-    const handleSelectDocument = (document) => {
-        setSelectedDocument(document);
-        setCurrentView('editor');
-    };
-
-    const handleCreateDocument = () => {
-        setSelectedDocument(null);
-        setCurrentView('editor');
-    };
-
-    const handleBackToDocuments = () => {
-        setSelectedDocument(null);
-        setCurrentView('documents');
-    };
-
-    return (
-        <div className="App">
-            <header className="app-header">
-                <h1>📝 Collaborative Editor</h1>
-                <div className="header-info">
-                    <div className="system-status">
-                        <span className={`status-indicator ${systemStatus.backend}`}></span>
-                        Backend: {systemStatus.backend}
-                        <span className={`status-indicator ${systemStatus.frontend}`}></span>
-                        Frontend: {systemStatus.frontend}
-                    </div>
-                    {user && (
-                        <div className="user-info">
-                            <span>👤 {user.email}</span>
-                            <button onClick={handleLogout} className="logout-btn">
-                                Logout
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </header>
-            
-            <main className="app-main">
-                {currentView === 'login' && (
-                    <Login 
-                        onLogin={handleLogin}
-                        onSwitchToRegister={() => setCurrentView('register')}
-                    />
-                )}
-                
-                {currentView === 'register' && (
-                    <Register 
-                        onRegister={handleRegister}
-                        onSwitchToLogin={() => setCurrentView('login')}
-                    />
-                )}
-                
-                {currentView === 'documents' && (
-                    <DocumentList 
-                        onSelectDocument={handleSelectDocument}
-                        onCreateDocument={handleCreateDocument}
-                        user={user}
-                    />
-                )}
-                
-                {currentView === 'editor' && (
-                    <Editor 
-                        document={selectedDocument}
-                        user={user}
-                        onBack={handleBackToDocuments}
-                    />
-                )}
-            </main>
-            
-            <footer className="app-footer">
-                <p>Real-Time Collaborative Document Editor | Mid-Point Examination</p>
-                <p>Features: 3D Visualization • Template Assessment • Real-time Collaboration</p>
-            </footer>
-        </div>
-    );
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Router>
+        <Routes>
+          {/* 公开路由 */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          
+          {/* 需要登录的路由 - 使用Dashboard作为布局 */}
+          <Route path="/" element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }>
+            <Route index element={<Navigate to="/my-documents" />} />
+            <Route path="my-documents" element={<MyDocuments />} />
+            <Route path="shared-documents" element={<SharedWithMe />} />
+            <Route path="sharing-documents" element={<SharingWithOthers />} />
+            <Route path="manage-documents" element={<ManageDocuments />} />
+          </Route>
+          
+          {/* 文档编辑器 */}
+          <Route path="/editor/:id" element={
+            <PrivateRoute>
+              <Editor />
+            </PrivateRoute>
+          } />
+          
+          {/* 默认重定向 */}
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </Router>
+    </ThemeProvider>
+  );
 }
 
 export default App;
