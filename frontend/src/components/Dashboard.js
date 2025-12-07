@@ -42,8 +42,8 @@ const Dashboard = () => {
 
   const menuItems = [
     { text: 'My Documents', icon: <DocumentIcon />, path: '/my-documents' },
-    { text: 'Shared with Me', icon: <GroupIcon />, path: '/shared-documents' },
-    { text: 'Sharing with Others', icon: <ShareIcon />, path: '/sharing-documents' },
+    { text: 'Shared with Me', icon: <ShareIcon />, path: '/shared-documents' },
+    { text: 'Sharing with Others', icon: <GroupIcon />, path: '/sharing-documents' },
     { text: 'Manage Documents', icon: <ManageIcon />, path: '/manage-documents' },
   ];
 
