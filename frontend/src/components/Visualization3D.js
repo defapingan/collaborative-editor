@@ -3,7 +3,8 @@ import {
   Box, Paper, Typography, Grid, Card, CardContent,
   Button, ToggleButton, ToggleButtonGroup, Slider,
   FormControl, InputLabel, Select, MenuItem,
-  CircularProgress, Alert
+  CircularProgress, Alert,
+  IconButton
 } from '@mui/material';
 import {
   ThreeDRotation as ThreeDIcon,
@@ -306,13 +307,13 @@ const Visualization3D = ({ documentId }) => {
         </Grid>
       </Paper>
 
-      {/* 3D可视化容器 */}
+      {/* 3D可视化容器 - 修改这里！ */}
       <Paper 
         ref={containerRef} 
         sx={{ 
           flexGrow: 1,
           position: 'relative',
-          overflow: 'hidden',
+          overflow: 'auto', // 改为auto允许滚动
           display: 'flex',
           flexDirection: 'column',
           backgroundColor: '#1e293b'
@@ -328,7 +329,8 @@ const Visualization3D = ({ documentId }) => {
                 flexDirection: 'column',
                 justifyContent: 'center',
                 alignItems: 'center',
-                color: 'white'
+                color: 'white',
+                minHeight: '400px'
               }}
             >
               <ThreeDIcon sx={{ fontSize: 80, mb: 2, color: '#3b82f6' }} />
@@ -398,202 +400,232 @@ const Visualization3D = ({ documentId }) => {
             </Box>
           </>
         ) : (
-          /* 图表视图 */
+          /* 图表视图 - 修改这里！ */
           <Box sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom color="white">
               Individual Metrics Analysis
             </Typography>
             
-            <Grid container spacing={3}>
+            {/* 使用CSS Grid确保三个卡片等宽 */}
+            <Box sx={{ 
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 1fr' },
+              gap: 3,
+              width: '100%',
+              mb: 3  // 添加底部边距
+            }}>
               {/* 用户编辑频率柱状图 */}
-              <Grid item xs={12} md={4}>
-                <Card sx={{ backgroundColor: '#0f172a' }}>
-                  <CardContent>
-                    <Typography variant="subtitle1" gutterBottom color="white">
-                      User Edit Frequency
-                    </Typography>
-                    <Typography variant="body2" color="#94a3b8" paragraph>
-                      Maximum edits by any single user per paragraph
-                    </Typography>
-                    
-                    <Box sx={{ height: 200, overflow: 'auto' }}>
-                      {userFreq.map((item) => (
-                        <Box 
-                          key={item.paragraphId}
-                          sx={{ 
-                            mb: 1,
-                            p: 1,
-                            backgroundColor: '#1e293b',
-                            borderRadius: 1
-                          }}
-                        >
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Typography variant="body2" color="#cbd5e1">
-                              Para {item.paragraph}
-                            </Typography>
-                            <Typography variant="body2" color="#3b82f6" fontWeight="bold">
-                              {item.frequency} edits
-                            </Typography>
-                          </Box>
-                          <Box 
-                            sx={{
-                              mt: 0.5,
-                              height: 8,
-                              width: `${(item.frequency / 20) * 100}%`,
-                              backgroundColor: '#3b82f6',
-                              borderRadius: 4
-                            }}
-                          />
+              <Card sx={{ 
+                backgroundColor: '#0f172a',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <Typography variant="subtitle1" gutterBottom color="white">
+                    User Edit Frequency
+                  </Typography>
+                  <Typography variant="body2" color="#94a3b8" paragraph>
+                    Maximum edits by any single user per paragraph
+                  </Typography>
+                  
+                  {/* 修改高度设置 */}
+                  <Box sx={{ 
+                    flex: 1, 
+                    overflowY: 'auto',
+                    minHeight: '200px'
+                  }}>
+                    {userFreq.map((item) => (
+                      <Box 
+                        key={item.paragraphId}
+                        sx={{ 
+                          mb: 1,
+                          p: 1,
+                          backgroundColor: '#1e293b',
+                          borderRadius: 1
+                        }}
+                      >
+                        <Box display="flex" justifyContent="space-between" alignItems="center">
+                          <Typography variant="body2" color="#cbd5e1">
+                            Para {item.paragraph}
+                          </Typography>
+                          <Typography variant="body2" color="#3b82f6" fontWeight="bold">
+                            {item.frequency} edits
+                          </Typography>
                         </Box>
-                      ))}
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
+                        <Box 
+                          sx={{
+                            mt: 0.5,
+                            height: 8,
+                            width: `${Math.min((item.frequency / 20) * 100, 100)}%`,
+                            backgroundColor: '#3b82f6',
+                            borderRadius: 4
+                          }}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
+                </CardContent>
+              </Card>
               
               {/* 段落总编辑频率柱状图 */}
-              <Grid item xs={12} md={4}>
-                <Card sx={{ backgroundColor: '#0f172a' }}>
-                  <CardContent>
-                    <Typography variant="subtitle1" gutterBottom color="white">
-                      Total Edit Frequency
-                    </Typography>
-                    <Typography variant="body2" color="#94a3b8" paragraph>
-                      Total edits per paragraph (all users combined)
-                    </Typography>
-                    
-                    <Box sx={{ height: 200, overflow: 'auto' }}>
-                      {paraFreq.map((item) => (
-                        <Box 
-                          key={item.paragraphId}
-                          sx={{ 
-                            mb: 1,
-                            p: 1,
-                            backgroundColor: '#1e293b',
-                            borderRadius: 1
-                          }}
-                        >
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Typography variant="body2" color="#cbd5e1">
-                              Para {item.paragraph}
-                            </Typography>
-                            <Typography variant="body2" color="#10b981" fontWeight="bold">
-                              {item.frequency} edits
-                            </Typography>
-                          </Box>
-                          <Box 
-                            sx={{
-                              mt: 0.5,
-                              height: 8,
-                              width: `${(item.frequency / 50) * 100}%`,
-                              backgroundColor: '#10b981',
-                              borderRadius: 4
-                            }}
-                          />
+              <Card sx={{ 
+                backgroundColor: '#0f172a',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <Typography variant="subtitle1" gutterBottom color="white">
+                    Total Edit Frequency
+                  </Typography>
+                  <Typography variant="body2" color="#94a3b8" paragraph>
+                    Total edits per paragraph (all users combined)
+                  </Typography>
+                  
+                  {/* 修改高度设置 */}
+                  <Box sx={{ 
+                    flex: 1, 
+                    overflowY: 'auto',
+                    minHeight: '200px'
+                  }}>
+                    {paraFreq.map((item) => (
+                      <Box 
+                        key={item.paragraphId}
+                        sx={{ 
+                          mb: 1,
+                          p: 1,
+                          backgroundColor: '#1e293b',
+                          borderRadius: 1
+                        }}
+                      >
+                        <Box display="flex" justifyContent="space-between" alignItems="center">
+                          <Typography variant="body2" color="#cbd5e1">
+                            Para {item.paragraph}
+                          </Typography>
+                          <Typography variant="body2" color="#10b981" fontWeight="bold">
+                            {item.frequency} edits
+                          </Typography>
                         </Box>
-                      ))}
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
+                        <Box 
+                          sx={{
+                            mt: 0.5,
+                            height: 8,
+                            width: `${Math.min((item.frequency / 50) * 100, 100)}%`,
+                            backgroundColor: '#10b981',
+                            borderRadius: 4
+                          }}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
+                </CardContent>
+              </Card>
               
               {/* 段落长度柱状图 */}
-              <Grid item xs={12} md={4}>
-                <Card sx={{ backgroundColor: '#0f172a' }}>
-                  <CardContent>
-                    <Typography variant="subtitle1" gutterBottom color="white">
-                      Paragraph Length
-                    </Typography>
-                    <Typography variant="body2" color="#94a3b8" paragraph>
-                      Character count per paragraph
-                    </Typography>
-                    
-                    <Box sx={{ height: 200, overflow: 'auto' }}>
-                      {lengths.map((item) => (
-                        <Box 
-                          key={item.paragraphId}
-                          sx={{ 
-                            mb: 1,
-                            p: 1,
-                            backgroundColor: '#1e293b',
-                            borderRadius: 1
-                          }}
-                        >
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Typography variant="body2" color="#cbd5e1">
-                              Para {item.paragraph}
-                            </Typography>
-                            <Typography variant="body2" color="#f59e0b" fontWeight="bold">
-                              {item.length} chars
-                            </Typography>
-                          </Box>
-                          <Box 
-                            sx={{
-                              mt: 0.5,
-                              height: 8,
-                              width: `${(item.length / 250) * 100}%`,
-                              backgroundColor: '#f59e0b',
-                              borderRadius: 4
-                            }}
-                          />
+              <Card sx={{ 
+                backgroundColor: '#0f172a',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <Typography variant="subtitle1" gutterBottom color="white">
+                    Paragraph Length
+                  </Typography>
+                  <Typography variant="body2" color="#94a3b8" paragraph>
+                    Character count per paragraph
+                  </Typography>
+                  
+                  {/* 修改高度设置 */}
+                  <Box sx={{ 
+                    flex: 1, 
+                    overflowY: 'auto',
+                    minHeight: '200px'
+                  }}>
+                    {lengths.map((item) => (
+                      <Box 
+                        key={item.paragraphId}
+                        sx={{ 
+                          mb: 1,
+                          p: 1,
+                          backgroundColor: '#1e293b',
+                          borderRadius: 1
+                        }}
+                      >
+                        <Box display="flex" justifyContent="space-between" alignItems="center">
+                          <Typography variant="body2" color="#cbd5e1">
+                            Para {item.paragraph}
+                          </Typography>
+                          <Typography variant="body2" color="#f59e0b" fontWeight="bold">
+                            {item.length} chars
+                          </Typography>
                         </Box>
-                      ))}
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
-            </Grid>
+                        <Box 
+                          sx={{
+                            mt: 0.5,
+                            height: 8,
+                            width: `${Math.min((item.length / 250) * 100, 100)}%`,
+                            backgroundColor: '#f59e0b',
+                            borderRadius: 4
+                          }}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
+                </CardContent>
+              </Card>
+            </Box>
             
-            {/* 总结统计 */}
-            <Card sx={{ mt: 3, backgroundColor: '#0f172a' }}>
-              <CardContent>
-                <Typography variant="subtitle1" gutterBottom color="white">
-                  Summary Statistics
-                </Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <Typography variant="h4" color="#3b82f6">
-                        {data?.summary.totalParagraphs}
-                      </Typography>
-                      <Typography variant="caption" color="#94a3b8">
-                        Total Paragraphs
-                      </Typography>
-                    </Box>
+            {/* 总结统计 - 确保有足够的空间 */}
+            <Box sx={{ mt: 3, mb: 3 }}>
+              <Card sx={{ backgroundColor: '#0f172a' }}>
+                <CardContent>
+                  <Typography variant="subtitle1" gutterBottom color="white">
+                    Summary Statistics
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6} md={3}>
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h4" color="#3b82f6">
+                          {data?.summary.totalParagraphs}
+                        </Typography>
+                        <Typography variant="caption" color="#94a3b8">
+                          Total Paragraphs
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h4" color="#10b981">
+                          {data?.summary.totalEdits}
+                        </Typography>
+                        <Typography variant="caption" color="#94a3b8">
+                          Total Edits
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h4" color="#f59e0b">
+                          {data?.summary.averageEditsPerParagraph.toFixed(1)}
+                        </Typography>
+                        <Typography variant="caption" color="#94a3b8">
+                          Avg Edits/Paragraph
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={6} md={3}>
+                      <Box sx={{ textAlign: 'center' }}>
+                        <Typography variant="h4" color="#ef4444">
+                          {data?.summary.mostActiveUser}
+                        </Typography>
+                        <Typography variant="caption" color="#94a3b8">
+                          Most Active User
+                        </Typography>
+                      </Box>
+                    </Grid>
                   </Grid>
-                  <Grid item xs={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <Typography variant="h4" color="#10b981">
-                        {data?.summary.totalEdits}
-                      </Typography>
-                      <Typography variant="caption" color="#94a3b8">
-                        Total Edits
-                      </Typography>
-                    </Box>
-                  </Grid>
-                  <Grid item xs={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <Typography variant="h4" color="#f59e0b">
-                        {data?.summary.averageEditsPerParagraph.toFixed(1)}
-                      </Typography>
-                      <Typography variant="caption" color="#94a3b8">
-                        Avg Edits/Paragraph
-                      </Typography>
-                    </Box>
-                  </Grid>
-                  <Grid item xs={6} md={3}>
-                    <Box sx={{ textAlign: 'center' }}>
-                      <Typography variant="h4" color="#ef4444">
-                        {data?.summary.mostActiveUser}
-                      </Typography>
-                      <Typography variant="caption" color="#94a3b8">
-                        Most Active User
-                      </Typography>
-                    </Box>
-                  </Grid>
-                </Grid>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </Box>
           </Box>
         )}
       </Paper>
