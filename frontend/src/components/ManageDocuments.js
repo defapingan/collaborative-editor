@@ -21,7 +21,8 @@ import {
   Clear as ClearIcon,
   CheckCircle as CheckIcon,
   Cancel as CancelIcon,
-  MoreVert as MoreIcon
+  MoreVert as MoreIcon,
+  Assessment as AssessmentIcon  // 新增：Template Assessment图标
 } from '@mui/icons-material';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -576,6 +577,19 @@ const ManageDocuments = () => {
                     
                     <TableCell>
                       <Box display="flex" gap={0.5}>
+                        {/* Template Assessment Button */}
+                        <Tooltip title="Template Assessment">
+                          <IconButton 
+                            onClick={() => navigate(`/template-assessment/${doc._id}`, { 
+                              state: { document: doc } 
+                            })}
+                            size="small"
+                            sx={{ color: '#8b5cf6' }}
+                          >
+                            <AssessmentIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        
                         <Tooltip title="Edit">
                           <IconButton 
                             component={Link}
@@ -706,6 +720,18 @@ const ManageDocuments = () => {
                   
                   <CardActions sx={{ justifyContent: 'space-between', p: 2 }}>
                     <Box>
+                      {/* Template Assessment Button for Card View */}
+                      <IconButton 
+                        onClick={() => navigate(`/template-assessment/${doc._id}`, { 
+                          state: { document: doc } 
+                        })}
+                        size="small"
+                        title="Template Assessment"
+                        sx={{ color: '#8b5cf6' }}
+                      >
+                        <AssessmentIcon fontSize="small" />
+                      </IconButton>
+                      
                       <IconButton 
                         component={Link}
                         to={`/editor/${doc._id}`}

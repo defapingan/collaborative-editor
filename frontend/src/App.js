@@ -12,6 +12,7 @@ import MyDocuments from './components/MyDocuments';
 import SharedWithMe from './components/SharedWithMe';
 import SharingWithOthers from './components/SharingWithOthers';
 import ManageDocuments from './components/ManageDocuments';
+import TemplateAssessment from './components/TemplateAssessment';
 
 // 创建主题
 const theme = createTheme({
@@ -113,6 +114,7 @@ function App() {
             <Route path="shared-documents" element={<SharedWithMe />} />
             <Route path="sharing-documents" element={<SharingWithOthers />} />
             <Route path="manage-documents" element={<ManageDocuments />} />
+            <Route path="/template-assessment/:documentId" element={<TemplateAssessment />} />
           </Route>
           
           {/* 文档编辑器 */}
