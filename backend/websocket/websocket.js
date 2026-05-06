@@ -1,21 +1,69 @@
 const dataCollector = require('../utils/dataCollector');
+const { ObjectId } = require('mongodb');
 
 function setupWebSocket(wss, db) {
-    const documentClients = new Map();
+    const documentClients = new Map(); // documentId -> Map of userId -> { ws, userName, lastSeen }
     
-    wss.on('connection', (ws) => {
+    // 心跳检测：每30秒检查一次
+    const heartbeatInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [docId, userMap] of documentClients.entries()) {
+            for (const [userId, userInfo] of userMap.entries()) {
+                if (now - userInfo.lastSeen > 45000) {
+                    console.log(`User ${userId} timed out in document ${docId}`);
+                    userMap.delete(userId);
+                    broadcastToDocumentClients(docId, documentClients, null, {
+                        type: 'user-left',
+                        userId: userId,
+                        userName: userInfo.userName,
+                        documentId: docId,
+                        timestamp: now
+                    });
+                }
+            }
+            if (userMap.size === 0) {
+                documentClients.delete(docId);
+            }
+        }
+    }, 30000);
+    
+    wss.on('connection', (ws, req) => {
         console.log('✅ New WebSocket connection established');
         
         let currentDocumentId = null;
+        let currentUserId = null;
+        let currentUserName = null;
+        
+        // 立即发送欢迎消息测试连接
+        ws.send(JSON.stringify({ type: 'welcome', message: 'Connected to WebSocket server' }));
         
         ws.on('message', async (message) => {
             try {
                 const data = JSON.parse(message);
+                console.log('📨 WebSocket message received:', data.type, 'userId:', data.userId);
                 
                 switch (data.type) {
+                    case 'auth':
+                        currentUserId = data.userId;
+                        currentUserName = data.userName || 'User';
+                        ws.userId = data.userId;
+                        ws.userName = currentUserName;
+                        console.log(`🔐 User authenticated: ${currentUserId} (${currentUserName})`);
+                        ws.send(JSON.stringify({ type: 'auth-success', userId: data.userId }));
+                        break;
+                        
                     case 'join-document':
-                        await handleJoinDocument(ws, data.documentId, documentClients);
-                        currentDocumentId = data.documentId;
+                        try {
+                            console.log(`📝 Joining document: ${data.documentId}, user: ${data.userId}`);
+                            await handleJoinDocument(ws, data, documentClients, db);
+                            currentDocumentId = data.documentId;
+                            currentUserId = data.userId;
+                            currentUserName = data.userName || 'User';
+                            console.log(`✅ Successfully joined document: ${currentDocumentId}`);
+                        } catch (err) {
+                            console.error('❌ Failed to join document:', err);
+                            ws.send(JSON.stringify({ type: 'error', message: 'Failed to join document: ' + err.message }));
+                        }
                         break;
                         
                     case 'text-update':
@@ -23,69 +71,142 @@ function setupWebSocket(wss, db) {
                         break;
                         
                     case 'cursor-update':
-                        broadcastToDocumentClients(
-                            currentDocumentId, 
-                            documentClients, 
-                            ws, 
-                            data
-                        );
+                        broadcastToDocumentClients(currentDocumentId, documentClients, ws, {
+                            type: 'cursor-update',
+                            userId: currentUserId,
+                            userName: currentUserName,
+                            position: data.position,
+                            documentId: currentDocumentId,
+                            timestamp: Date.now()
+                        });
                         break;
                         
-                    case 'request-analytics':
-                        const vizData = dataCollector.getVisualizationData(data.documentId);
-                        ws.send(JSON.stringify({
-                            type: 'analytics-data',
-                            data: vizData
-                        }));
+                    case 'heartbeat':
+                        if (currentDocumentId && currentUserId && documentClients.has(currentDocumentId)) {
+                            const userMap = documentClients.get(currentDocumentId);
+                            if (userMap.has(currentUserId)) {
+                                userMap.get(currentUserId).lastSeen = Date.now();
+                            }
+                            ws.send(JSON.stringify({ type: 'heartbeat-ack', timestamp: Date.now() }));
+                        }
                         break;
+                        
+                    case 'leave-document':
+                        handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients);
+                        currentDocumentId = null;
+                        break;
+                        
+                    default:
+                        console.log(`Unknown message type: ${data.type}`);
                 }
             } catch (error) {
-                console.error('WebSocket message error:', error);
-                ws.send(JSON.stringify({ 
-                    type: 'error', 
-                    message: 'Failed to process message' 
-                }));
+                console.error('❌ WebSocket message parse error:', error);
+                ws.send(JSON.stringify({ type: 'error', message: 'Failed to process message' }));
             }
         });
         
-        ws.on('close', () => {
-            console.log('WebSocket connection closed');
-            if (currentDocumentId && documentClients.has(currentDocumentId)) {
-                const clients = documentClients.get(currentDocumentId);
-                const index = clients.indexOf(ws);
-                if (index > -1) clients.splice(index, 1);
-                if (clients.length === 0) documentClients.delete(currentDocumentId);
+        ws.on('close', (code, reason) => {
+            console.log(`🔌 WebSocket connection closed for user: ${currentUserId}, code: ${code}, reason: ${reason || 'no reason'}`);
+            if (currentDocumentId && currentUserId) {
+                handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients);
             }
         });
+        
+        ws.on('error', (error) => {
+            console.error('❌ WebSocket error:', error);
+        });
+    });
+    
+    wss.on('close', () => {
+        clearInterval(heartbeatInterval);
     });
 }
 
-async function handleJoinDocument(ws, documentId, documentClients) {
-    if (!documentClients.has(documentId)) {
-        documentClients.set(documentId, []);
+async function handleJoinDocument(ws, data, documentClients, db) {
+    const { documentId, userId, userName } = data;
+    
+    // 验证 documentId 是否有效
+    if (!documentId || !ObjectId.isValid(documentId)) {
+        console.error(`Invalid documentId: ${documentId}`);
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid document ID' }));
+        return;
     }
     
-    const clients = documentClients.get(documentId);
-    if (!clients.includes(ws)) {
-        clients.push(ws);
+    if (!documentClients.has(documentId)) {
+        documentClients.set(documentId, new Map());
     }
+    
+    const userMap = documentClients.get(documentId);
+    
+    userMap.set(userId, {
+        ws: ws,
+        userName: userName || 'User',
+        lastSeen: Date.now()
+    });
+    
+    ws.userId = userId;
+    ws.userName = userName || 'User';
+    
+    // 获取文档内容
+    try {
+        const document = await db.collection('documents').findOne({ _id: new ObjectId(documentId) });
+        if (document) {
+            ws.send(JSON.stringify({
+                type: 'document-content',
+                content: document.content || '',
+                version: document.version || 1,
+                title: document.title || 'Untitled'
+            }));
+            console.log(`📄 Sent document content to ${userId}, content length: ${document.content?.length || 0}`);
+        } else {
+            console.warn(`Document not found: ${documentId}`);
+            ws.send(JSON.stringify({ type: 'error', message: 'Document not found' }));
+        }
+    } catch (error) {
+        console.error('Error fetching document:', error);
+        ws.send(JSON.stringify({ type: 'error', message: 'Failed to fetch document' }));
+    }
+    
+    // 通知其他用户有新用户加入
+    broadcastToDocumentClients(documentId, documentClients, ws, {
+        type: 'user-joined',
+        userId: userId,
+        userName: userName || 'User',
+        documentId: documentId,
+        timestamp: Date.now()
+    });
+    
+    // 发送当前用户列表给新用户
+    const users = Array.from(userMap.entries())
+        .filter(([uid, info]) => uid !== userId)
+        .map(([uid, info]) => ({ userId: uid, userName: info.userName }));
     
     ws.send(JSON.stringify({
-        type: 'joined-document',
-        documentId: documentId,
-        message: 'Successfully joined document'
+        type: 'user-list',
+        users: users,
+        documentId: documentId
     }));
     
-    console.log(`Client joined document: ${documentId}, total clients: ${clients.length}`);
+    console.log(`✅ Client ${userName} (${userId}) joined document: ${documentId}, total users: ${userMap.size}, online users: ${users.map(u => u.userName).join(', ') || 'none'}`);
 }
 
 async function handleTextUpdate(ws, data, documentClients, db) {
-    const { documentId, content, version, paragraphId } = data;
+    const { documentId, content, version, userId, userName, paragraphId } = data;
     
-    // 记录编辑数据到收集器
-    if (paragraphId && data.userId) {
-        dataCollector.recordEdit(documentId, paragraphId, data.userId, 'edit');
-        dataCollector.updateParagraphLength(documentId, paragraphId, content.length);
+    // 记录编辑数据
+    if (paragraphId && userId) {
+        dataCollector.recordEdit(documentId, paragraphId, userId, 'edit');
+        dataCollector.updateParagraphLength(documentId, paragraphId, content?.length || 0);
+    }
+    
+    // 保存到数据库
+    try {
+        await db.collection('documents').updateOne(
+            { _id: new ObjectId(documentId) },
+            { $set: { content: content, updatedAt: new Date(), version: version } }
+        );
+    } catch (error) {
+        console.error('Error saving to database:', error);
     }
     
     // 广播给同一文档的其他客户端
@@ -93,20 +214,51 @@ async function handleTextUpdate(ws, data, documentClients, db) {
         type: 'text-update',
         content: content,
         version: version,
+        userId: userId,
+        userName: userName,
         paragraphId: paragraphId,
+        documentId: documentId,
         timestamp: new Date().toISOString()
     });
+}
+
+function handleLeaveDocument(ws, documentId, userId, documentClients) {
+    if (documentId && documentClients.has(documentId)) {
+        const userMap = documentClients.get(documentId);
+        const userInfo = userMap.get(userId);
+        const userName = userInfo?.userName || 'User';
+        
+        userMap.delete(userId);
+        
+        // 通知其他用户
+        broadcastToDocumentClients(documentId, documentClients, null, {
+            type: 'user-left',
+            userId: userId,
+            userName: userName,
+            documentId: documentId,
+            timestamp: Date.now()
+        });
+        
+        if (userMap.size === 0) {
+            documentClients.delete(documentId);
+        }
+        
+        console.log(`👋 User ${userName} (${userId}) left document: ${documentId}, remaining users: ${userMap.size}`);
+    }
 }
 
 function broadcastToDocumentClients(documentId, documentClients, senderWs, message) {
     if (!documentClients.has(documentId)) return;
     
-    const clients = documentClients.get(documentId);
-    clients.forEach(client => {
+    const userMap = documentClients.get(documentId);
+    const messageStr = JSON.stringify(message);
+    
+    for (const [userId, userInfo] of userMap.entries()) {
+        const client = userInfo.ws;
         if (client !== senderWs && client.readyState === client.OPEN) {
-            client.send(JSON.stringify(message));
+            client.send(messageStr);
         }
-    });
+    }
 }
 
 module.exports = {

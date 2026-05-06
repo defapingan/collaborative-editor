@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { authAPI } from '../services/api';
 import { 
   Container, Box, Typography, TextField, Button, 
   Paper, Alert, Link, CircularProgress
@@ -14,74 +15,66 @@ function Login() {
     
     const handleSubmit = async (e) => {
         e.preventDefault();
-        console.log('Login form submitted');
-        console.log('Email:', email, 'Password:', password);
-        
         setLoading(true);
         setError('');
         
         try {
-            // 简单验证
             if (!email || !password) {
                 setError('Please enter email and password');
+                setLoading(false);
                 return;
             }
             
-            // 模拟登录 - 中期检查用
-            console.log('Logging in with:', { email, password });
+            const result = await authAPI.login(email, password);
             
-            // 存储认证信息
-            const token = 'demo-token-' + Date.now();
-            localStorage.setItem('authToken', token);
-            localStorage.setItem('user', JSON.stringify({
-                email: email,
-                name: email.split('@')[0],
-                id: 'user_' + Date.now()
-            }));
-            
-            console.log('Login successful, token stored:', token);
-            console.log('localStorage内容:');
-            console.log('- authToken:', localStorage.getItem('authToken'));
-            console.log('- user:', localStorage.getItem('user'));
-            
-            // 跳转到首页
-            navigate('/');
-            
-            // 备用方案：如果navigate不行，使用强制刷新
-            // setTimeout(() => {
-            //   window.location.href = '/';
-            // }, 100);
-            
-        } catch (error) {
-            console.error('Login error:', error);
-            setError(error.message || 'Login failed');
+            if (result.token && result.user) {
+                localStorage.setItem('authToken', result.token);
+                localStorage.setItem('user', JSON.stringify(result.user));
+                navigate('/');
+            } else {
+                setError('Login failed');
+            }
+        } catch (err) {
+            console.error('Login error:', err);
+            setError(err.message || 'Login failed. Please check your credentials.');
         } finally {
             setLoading(false);
         }
     };
     
     const handleSwitchToRegister = () => {
-        console.log('Switching to register');
         navigate('/register');
     };
     
-    const handleDemoLogin = () => {
-        // 一键使用演示账户
-        console.log('Using demo account');
-        setEmail('demo@example.com');
-        setPassword('demo123');
+    const handleDemoLogin = async () => {
+        setLoading(true);
+        try {
+            const result = await authAPI.login('demo@example.com', 'demo123');
+            if (result.token && result.user) {
+                localStorage.setItem('authToken', result.token);
+                localStorage.setItem('user', JSON.stringify(result.user));
+                navigate('/');
+            }
+        } catch (err) {
+            // 如果demo用户不存在，尝试注册
+            try {
+                const registerResult = await authAPI.register('demo@example.com', 'demo123');
+                if (registerResult.token && registerResult.user) {
+                    localStorage.setItem('authToken', registerResult.token);
+                    localStorage.setItem('user', JSON.stringify(registerResult.user));
+                    navigate('/');
+                }
+            } catch (regErr) {
+                setError('Demo login failed. Please register first.');
+            }
+        } finally {
+            setLoading(false);
+        }
     };
     
     return (
         <Container component="main" maxWidth="xs">
-            <Box
-                sx={{
-                    marginTop: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                }}
-            >
+            <Box sx={{ marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <Paper elevation={3} sx={{ p: 4, width: '100%', borderRadius: 2 }}>
                     <Typography component="h1" variant="h5" align="center" gutterBottom sx={{ fontWeight: 600 }}>
                         Collaborative Editor
@@ -90,40 +83,30 @@ function Login() {
                         Sign in to your account
                     </Typography>
                     
-                    {error && (
-                        <Alert severity="error" sx={{ mb: 2, mt: 2 }}>
-                            {error}
-                        </Alert>
-                    )}
+                    {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
                     
-                    <Box component="form" onSubmit={handleSubmit} noValidate sx={{ mt: 1 }}>
+                    <Box component="form" onSubmit={handleSubmit} noValidate>
                         <TextField
                             margin="normal"
                             required
                             fullWidth
-                            id="email"
                             label="Email Address"
-                            name="email"
                             autoComplete="email"
                             autoFocus
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             disabled={loading}
-                            variant="outlined"
                         />
                         <TextField
                             margin="normal"
                             required
                             fullWidth
-                            name="password"
                             label="Password"
                             type="password"
-                            id="password"
                             autoComplete="current-password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             disabled={loading}
-                            variant="outlined"
                         />
                         
                         <Button
@@ -140,7 +123,6 @@ function Login() {
                             fullWidth
                             variant="outlined"
                             onClick={handleDemoLogin}
-                            sx={{ mb: 2 }}
                             disabled={loading}
                         >
                             Use Demo Account
@@ -148,28 +130,14 @@ function Login() {
                     </Box>
                     
                     <Box sx={{ textAlign: 'center', mt: 3, pt: 2, borderTop: 1, borderColor: 'divider' }}>
-                        <Typography variant="body2" color="text.secondary">
+                        <Typography variant="body2">
                             Don't have an account?{' '}
-                            <Link 
-                                component="button" 
-                                variant="body2"
-                                onClick={handleSwitchToRegister}
-                                sx={{ cursor: 'pointer', fontWeight: 600 }}
-                            >
+                            <Link component="button" onClick={handleSwitchToRegister} sx={{ fontWeight: 600 }}>
                                 Sign up
                             </Link>
                         </Typography>
                     </Box>
                 </Paper>
-                
-                <Box sx={{ mt: 4, textAlign: 'center' }}>
-                    <Typography variant="body2" color="text.secondary">
-                        For demonstration purposes only
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                        Use any email and password to login
-                    </Typography>
-                </Box>
             </Box>
         </Container>
     );

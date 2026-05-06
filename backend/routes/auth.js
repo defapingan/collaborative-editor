@@ -7,6 +7,8 @@ async function handleAuthRoutes(req, res, db) {
         await handleLogin(req, res, db);
     } else if (method === 'POST' && url === '/api/auth/register') {
         await handleRegister(req, res, db);
+    } else if (method === 'GET' && url === '/api/auth/me') {
+        await handleGetMe(req, res, db);
     } else {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Authentication endpoint not found' }));
@@ -30,7 +32,11 @@ async function handleLogin(req, res, db) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 token: result.token, 
-                user: result.user 
+                user: { 
+                    id: result.user.id, 
+                    email: result.user.email,
+                    name: result.user.email.split('@')[0]
+                } 
             }));
         } else {
             res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -66,7 +72,11 @@ async function handleRegister(req, res, db) {
             res.writeHead(201, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 token: result.token, 
-                user: result.user 
+                user: { 
+                    id: result.user.id, 
+                    email: result.user.email,
+                    name: result.user.email.split('@')[0]
+                } 
             }));
         } else {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -74,6 +84,48 @@ async function handleRegister(req, res, db) {
         }
     } catch (error) {
         console.error('Register route error:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+    }
+}
+
+async function handleGetMe(req, res, db) {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Authentication required' }));
+            return;
+        }
+        
+        const token = authHeader.split(' ')[1];
+        const decoded = require('../auth/auth').verifyToken(token);
+        
+        if (!decoded) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid token' }));
+            return;
+        }
+        
+        const user = await db.collection('users').findOne(
+            { _id: new require('mongodb').ObjectId(decoded.userId) },
+            { projection: { password: 0 } }
+        );
+        
+        if (!user) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'User not found' }));
+            return;
+        }
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ 
+            id: user._id.toString(), 
+            email: user.email,
+            name: user.email.split('@')[0]
+        }));
+    } catch (error) {
+        console.error('Get me error:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Internal server error' }));
     }

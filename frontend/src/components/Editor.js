@@ -1,131 +1,209 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Visualization3D from './Visualization3D';
+import { websocketService } from '../services/websocket';
+import { documentAPI } from '../services/api';
 import { 
   Box, TextField, Button, Paper, Typography, 
-  IconButton, CircularProgress, Alert, Grid, Card, CardContent
+  IconButton, CircularProgress, Alert, Grid,
+  AppBar, Toolbar, Chip, Avatar, Tooltip
 } from '@mui/material';
 import {
   ThreeDRotation as ThreeDIcon,
   Save as SaveIcon,
   ArrowBack as BackIcon,
-  ZoomIn as ZoomInIcon,
-  ZoomOut as ZoomOutIcon
+  People as PeopleIcon
 } from '@mui/icons-material';
 
 function Editor() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [document, setDocument] = useState({ 
+  const [documentState, setDocumentState] = useState({ 
     _id: id, 
-    title: `Document ${id || 'New'}`, 
+    title: '', 
     content: '', 
-    version: 1 
+    version: 1,
+    editStats: { totalSaves: 0, paragraphEdits: {} }
   });
-  const [title, setTitle] = useState(`Document ${id || 'New'}`);
+  const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [showVisualization, setShowVisualization] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(!!id);
-  const contentRef = useRef('');
+  const [loading, setLoading] = useState(true);
+  const [activeUsers, setActiveUsers] = useState([]);
+  
   const saveTimeoutRef = useRef(null);
+  const heartbeatIntervalRef = useRef(null);
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  useEffect(() => {
-    console.log('Editor mounted, document ID:', id);
-    
-    if (id) {
-      // 模拟加载文档数据
-      setLoading(true);
-      setTimeout(() => {
-        const mockContent = `This is the content for document ${id}. 
-
-You can edit this text in real-time.
-
-Multiple users can collaborate on this document simultaneously.
-
-Each paragraph will be tracked for 3D visualization analysis.
-
----
-Sample paragraphs for demonstration:
-
-1. Introduction to Collaborative Editing
-Real-time collaborative editing allows multiple users to work on the same document simultaneously. This technology enables teams to collaborate more efficiently.
-
-2. Technical Implementation
-The system uses WebSocket for real-time communication and operational transformation algorithms for conflict resolution. Each edit is tracked and synchronized across all connected clients.
-
-3. 3D Visualization Features
-The 3D visualization system analyzes editing patterns across different paragraphs and users. It helps identify collaboration hotspots and editing frequencies.
-
-4. Version Control
-Every change is tracked and can be reverted. The system maintains a complete history of all edits with timestamps and user attribution.
-
-5. Future Enhancements
-Potential future features include AI-assisted editing, template systems, and advanced analytics dashboards.`;
-        
-        setTitle(`Document ${id}`);
-        setContent(mockContent);
-        setLoading(false);
-        
-        // 模拟分析数据
-        setAnalyticsData({
-          documentId: id,
-          title: `Document ${id}`,
-          paragraphs: [
-            { id: 1, position: 1, length: 150, totalEdits: 25, userEdits: [{ userId: 'user1', editCount: 10 }, { userId: 'user2', editCount: 15 }] },
-            { id: 2, position: 2, length: 200, totalEdits: 18, userEdits: [{ userId: 'user1', editCount: 8 }, { userId: 'user2', editCount: 10 }] },
-            { id: 3, position: 3, length: 120, totalEdits: 32, userEdits: [{ userId: 'user1', editCount: 20 }, { userId: 'user3', editCount: 12 }] },
-            { id: 4, position: 4, length: 180, totalEdits: 15, userEdits: [{ userId: 'user2', editCount: 15 }] },
-            { id: 5, position: 5, length: 90, totalEdits: 8, userEdits: [{ userId: 'user3', editCount: 5 }, { userId: 'user4', editCount: 3 }] },
-          ],
-          users: [
-            { id: 'user1', name: 'Alice', email: 'alice@example.com' },
-            { id: 'user2', name: 'Bob', email: 'bob@example.com' },
-            { id: 'user3', name: 'Charlie', email: 'charlie@example.com' },
-            { id: 'user4', name: 'Diana', email: 'diana@example.com' },
-          ]
-        });
-      }, 1000);
-    }
-    
-    // 设置自动保存
-    contentRef.current = content;
-    
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-    
-    saveTimeoutRef.current = setTimeout(() => {
-      if (content.trim() && content !== contentRef.current) {
-        autoSave();
+  // 计算当前光标所在的段落
+  const getCurrentParagraphId = (text, cursorPos) => {
+    if (!text) return 1;
+    const paragraphs = text.split(/\n\s*\n/);
+    let charCount = 0;
+    for (let i = 0; i < paragraphs.length; i++) {
+      const paraLength = paragraphs[i].length;
+      if (cursorPos <= charCount + paraLength + 2) {
+        return i + 1;
       }
-    }, 2000);
+      charCount += paraLength + 2;
+    }
+    return paragraphs.length || 1;
+  };
+
+  // 加载文档
+  useEffect(() => {
+    if (id) {
+      loadDocument();
+    } else {
+      setLoading(false);
+      setTitle('New Document');
+      setContent('');
+    }
     
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+      }
+      if (websocketService.isConnected()) {
+        websocketService.disconnect();
       }
     };
-  }, [id, content]);
+  }, [id]);
 
-  const autoSave = async () => {
-    if (!content.trim()) return;
+  // WebSocket连接和消息处理
+  useEffect(() => {
+    if (!id || loading || !user.id) return;
     
+    websocketService.connect(id, user.id, user.name || user.email?.split('@')[0] || 'User');
+    
+    if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+    heartbeatIntervalRef.current = setInterval(() => {
+      if (websocketService.isConnected()) {
+        websocketService.send({ type: 'heartbeat' });
+      }
+    }, 25000);
+    
+    const handleTextUpdate = (message) => {
+      if (message.userId !== user.id) {
+        setContent(message.content);
+        setDocumentState(prev => ({ ...prev, content: message.content, version: message.version }));
+      }
+    };
+    
+    const handleUserJoined = (message) => {
+      setActiveUsers(prev => {
+        if (prev.some(u => u.userId === message.userId)) return prev;
+        return [...prev, { userId: message.userId, userName: message.userName || 'User' }];
+      });
+    };
+    
+    const handleUserLeft = (message) => {
+      setActiveUsers(prev => prev.filter(u => u.userId !== message.userId));
+    };
+    
+    const handleUserList = (message) => {
+      if (message.users && Array.isArray(message.users)) {
+        setActiveUsers(message.users);
+      }
+    };
+    
+    const handleDocumentContent = (message) => {
+      if (message.content !== undefined && message.content !== content) {
+        setContent(message.content);
+        setDocumentState(prev => ({ ...prev, content: message.content, version: message.version }));
+        if (message.title) setTitle(message.title);
+      }
+    };
+    
+    websocketService.on('text-update', handleTextUpdate);
+    websocketService.on('user-joined', handleUserJoined);
+    websocketService.on('user-left', handleUserLeft);
+    websocketService.on('user-list', handleUserList);
+    websocketService.on('document-content', handleDocumentContent);
+    
+    return () => {
+      websocketService.off('text-update', handleTextUpdate);
+      websocketService.off('user-joined', handleUserJoined);
+      websocketService.off('user-left', handleUserLeft);
+      websocketService.off('user-list', handleUserList);
+      websocketService.off('document-content', handleDocumentContent);
+    };
+  }, [id, loading, user.id, user.name]);
+
+  const loadDocument = async () => {
     try {
-      console.log('Auto-saving document:', { id, title, contentLength: content.length });
-      // 模拟API调用
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setSaveMessage('Auto-saved at ' + new Date().toLocaleTimeString());
-      setTimeout(() => setSaveMessage(''), 3000);
-    } catch (error) {
-      console.error('Auto-save error:', error);
+      setLoading(true);
+      const doc = await documentAPI.getById(id);
+      setDocumentState(doc);
+      setTitle(doc.title);
+      setContent(doc.content || '');
+      setAnalyticsData({ 
+        documentId: id, 
+        title: doc.title, 
+        paragraphs: [],
+        editStats: doc.editStats || { totalSaves: 0, paragraphEdits: {} }
+      });
+    } catch (err) {
+      console.error('Failed to load document:', err);
+      setError('Failed to load document');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSaveDocument = async () => {
+  const saveDocument = useCallback(async (newContent, newTitle, paragraphId = null) => {
+    if (!id) return false;
+    try {
+      const updateData = {};
+      if (newContent !== undefined) updateData.content = newContent;
+      if (newTitle !== undefined) updateData.title = newTitle;
+      if (paragraphId !== undefined) updateData.paragraphId = paragraphId;
+      if (Object.keys(updateData).length === 0) return false;
+      
+      const result = await documentAPI.update(id, updateData.content, updateData.title);
+      setDocumentState(prev => ({ 
+        ...prev, 
+        ...updateData, 
+        version: result.version || prev.version + 1,
+        editStats: result.editStats || prev.editStats
+      }));
+      return true;
+    } catch (err) {
+      console.error('Failed to save:', err);
+      return false;
+    }
+  }, [id]);
+
+  const handleContentChange = (newContent) => {
+    setContent(newContent);
+    
+    if (websocketService.isConnected() && id) {
+      websocketService.sendTextUpdate(newContent, documentState.version + 1);
+    }
+    
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      saveDocument(newContent);
+      setSaveMessage('Auto-saved');
+      setTimeout(() => setSaveMessage(''), 2000);
+    }, 1500);
+  };
+
+  const handleTitleChange = (newTitle) => {
+    setTitle(newTitle);
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      saveDocument(content, newTitle);
+      setSaveMessage('Auto-saved');
+      setTimeout(() => setSaveMessage(''), 2000);
+    }, 1000);
+  };
+
+  const handleManualSave = async () => {
     if (!title.trim()) {
       setError('Please enter a document title');
       return;
@@ -136,34 +214,31 @@ Potential future features include AI-assisted editing, template systems, and adv
     setSaveMessage('Saving...');
     
     try {
-      console.log('Saving document:', { id, title, contentLength: content.length });
+      // 使用 window.document 获取 textarea 元素
+      const textareaElement = window.document.querySelector('textarea');
+      const cursorPos = textareaElement?.selectionStart || 0;
+      const paragraphId = getCurrentParagraphId(content, cursorPos);
       
-      // 模拟API调用
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      setSaveMessage('Document saved successfully!');
-      setTimeout(() => setSaveMessage(''), 3000);
-      
-      // 如果是新文档，更新ID
-      if (!id) {
-        const newId = 'doc_' + Date.now();
-        setDocument({ ...document, _id: newId });
-        navigate(`/editor/${newId}`, { replace: true });
+      const success = await saveDocument(content, title, paragraphId);
+      if (success) {
+        const newTotalSaves = (documentState.editStats?.totalSaves || 0) + 1;
+        setSaveMessage(`Document saved! Total saves: ${newTotalSaves}`);
+        setTimeout(() => setSaveMessage(''), 3000);
+        // 刷新文档数据以获取最新统计
+        await loadDocument();
+      } else {
+        setError('Failed to save document');
       }
-    } catch (error) {
-      setError('Error saving document: ' + error.message);
-      console.error('Save error:', error);
+    } catch (err) {
+      console.error('Save error:', err);
+      setError('Error saving document: ' + err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleBack = () => {
-    navigate('/my-documents');
-  };
-
-  const handleContentChange = (newContent) => {
-    setContent(newContent);
+    navigate('/manage-documents');
   };
 
   if (loading) {
@@ -176,129 +251,145 @@ Potential future features include AI-assisted editing, template systems, and adv
   }
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* 工具栏 */}
-      <Paper sx={{ 
-        p: 2, 
-        mb: 2, 
-        backgroundColor: '#f8fafc',
-        borderBottom: '1px solid #e2e8f0'
-      }}>
-        <Grid container alignItems="center" spacing={2}>
-          <Grid item>
-            <IconButton onClick={handleBack} title="Back to Documents">
-              <BackIcon />
-            </IconButton>
-          </Grid>
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: '#f5f5f5' }}>
+      <AppBar position="static" color="default" elevation={1}>
+        <Toolbar>
+          <IconButton onClick={handleBack} edge="start">
+            <BackIcon />
+          </IconButton>
           
-          <Grid item xs>
+          <TextField
+            size="small"
+            value={title}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            placeholder="Document Title"
+            variant="outlined"
+            sx={{ mx: 2, width: 300, bgcolor: 'white' }}
+          />
+          
+          <Box sx={{ flexGrow: 1 }} />
+          
+          {/* 显示保存次数 */}
+          <Chip
+            label={`Saves: ${documentState.editStats?.totalSaves || 0}`}
+            size="small"
+            sx={{ mr: 2 }}
+            variant="outlined"
+          />
+          
+          <Tooltip title={`${activeUsers.length} other users online`}>
+            <Chip
+              icon={<PeopleIcon />}
+              label={activeUsers.length}
+              size="small"
+              sx={{ mr: 2 }}
+              color={activeUsers.length > 0 ? "success" : "default"}
+              variant={activeUsers.length > 0 ? "filled" : "outlined"}
+            />
+          </Tooltip>
+          
+          <Button
+            variant="outlined"
+            startIcon={<ThreeDIcon />}
+            onClick={() => setShowVisualization(!showVisualization)}
+            sx={{ mr: 1 }}
+          >
+            {showVisualization ? 'Hide 3D' : 'Show 3D'}
+          </Button>
+          
+          <Button 
+            variant="contained" 
+            startIcon={<SaveIcon />} 
+            onClick={handleManualSave} 
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save'}
+          </Button>
+        </Toolbar>
+      </AppBar>
+      
+      {(saveMessage || error) && (
+        <Box sx={{ p: 1, textAlign: 'center' }}>
+          {saveMessage && (
+            <Typography variant="caption" color="success.main">
+              {saveMessage}
+            </Typography>
+          )}
+          {error && (
+            <Alert severity="error" sx={{ mt: 1 }}>
+              {error}
+            </Alert>
+          )}
+        </Box>
+      )}
+      
+      {/* 在线用户列表 */}
+      <Paper sx={{ p: 1, mx: 2, mt: 1, bgcolor: activeUsers.length > 0 ? '#e8f5e9' : '#f5f5f5' }}>
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          <Typography variant="caption" color="text.secondary">
+            Online now ({activeUsers.length + 1}):
+          </Typography>
+          <Chip
+            avatar={<Avatar sx={{ width: 24, height: 24, bgcolor: '#3b82f6' }}>
+              {(user.name || user.email?.[0] || 'U')[0].toUpperCase()}
+            </Avatar>}
+            label={`${user.name || user.email?.split('@')[0] || 'You'} (you)`}
+            size="small"
+            variant="outlined"
+            sx={{ borderColor: '#3b82f6', color: '#1e40af' }}
+          />
+          {activeUsers.filter(u => u.userId !== user.id).map(u => (
+            <Chip
+              key={u.userId}
+              avatar={<Avatar sx={{ width: 24, height: 24, bgcolor: '#4caf50' }}>
+                {(u.userName || 'U')[0].toUpperCase()}
+              </Avatar>}
+              label={u.userName || 'User'}
+              size="small"
+              variant="outlined"
+              sx={{ borderColor: '#4caf50', color: '#2e7d32' }}
+            />
+          ))}
+        </Box>
+      </Paper>
+      
+      <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', p: 2, position: 'relative' }}>
+        {showVisualization ? (
+          <Visualization3D documentId={id} />
+        ) : (
+          <Paper sx={{ flexGrow: 1, position: 'relative', overflow: 'auto' }}>
             <TextField
               fullWidth
+              multiline
+              value={content}
+              onChange={(e) => handleContentChange(e.target.value)}
+              placeholder="Start typing your document here..."
               variant="outlined"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Document Title"
               sx={{
+                height: '100%',
                 '& .MuiOutlinedInput-root': {
-                  backgroundColor: 'white',
+                  height: '100%',
+                  alignItems: 'flex-start',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                  lineHeight: '1.6',
+                },
+                '& .MuiOutlinedInput-input': {
+                  height: '100% !important',
+                  minHeight: '500px',
                 }
               }}
             />
-          </Grid>
-          
-          <Grid item>
-            <Button
-              variant="outlined"
-              startIcon={<ThreeDIcon />}
-              onClick={() => setShowVisualization(!showVisualization)}
-              sx={{ mr: 1 }}
-            >
-              {showVisualization ? 'Hide 3D' : 'Show 3D'}
-            </Button>
-            
-            <Button
-              variant="contained"
-              startIcon={<SaveIcon />}
-              onClick={handleSaveDocument}
-              disabled={isSaving}
-            >
-              {isSaving ? 'Saving...' : 'Save'}
-            </Button>
-          </Grid>
-        </Grid>
-        
-        {(saveMessage || error) && (
-          <Box sx={{ mt: 1 }}>
-            {saveMessage && (
-              <Typography variant="caption" color="success.main">
-                {saveMessage}
-              </Typography>
-            )}
-            {error && (
-              <Alert severity="error" sx={{ mt: 1 }}>
-                {error}
-              </Alert>
-            )}
-          </Box>
-        )}
-      </Paper>
-
-      {/* 主内容区域 */}
-      <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden' }}>
-        {showVisualization ? (
-          <Box sx={{ width: '100%', height: '100%' }}>
-            <Visualization3D 
-              documentId={id || document._id}
-              analyticsData={analyticsData}
-            />
-          </Box>
-        ) : (
-          <Box sx={{ width: '100%', height: '100%', p: 2 }}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <CardContent sx={{ flexGrow: 1, p: 0 }}>
-                <TextField
-                  fullWidth
-                  multiline
-                  value={content}
-                  onChange={(e) => handleContentChange(e.target.value)}
-                  placeholder="Start typing your document here...
-
-You can collaborate in real-time with others.
-Each paragraph will be tracked for 3D visualization."
-                  variant="outlined"
-                  sx={{
-                    height: '100%',
-                    '& .MuiOutlinedInput-root': {
-                      height: '100%',
-                      alignItems: 'flex-start',
-                    },
-                    '& .MuiOutlinedInput-input': {
-                      height: '100% !important',
-                      minHeight: '500px',
-                      fontFamily: 'monospace',
-                      fontSize: '14px',
-                      lineHeight: '1.6',
-                    }
-                  }}
-                />
-              </CardContent>
-            </Card>
-          </Box>
+          </Paper>
         )}
       </Box>
-
-      {/* 状态栏 */}
-      <Paper sx={{ 
-        p: 1, 
-        mt: 1, 
-        backgroundColor: '#f1f5f9',
-        borderTop: '1px solid #e2e8f0'
-      }}>
-        <Grid container spacing={1} alignItems="center">
+      
+      <Paper sx={{ p: 1, mt: 1, borderRadius: 0 }}>
+        <Grid container spacing={2}>
           <Grid item xs>
             <Typography variant="caption" color="text.secondary">
-              <strong>Real-time Collaboration:</strong> {id ? 'Simulated (Mid-point Demo)' : 'Create and save to enable'}
-              {id && ' | Auto-save enabled'}
+              <strong>Real-time Collaboration:</strong> {websocketService.isConnected() ? 'Connected' : 'Disconnected'}
+              {websocketService.isConnected() && ` | ${activeUsers.filter(u => u.userId !== user.id).length} other(s) online`}
             </Typography>
           </Grid>
           <Grid item>

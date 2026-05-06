@@ -6,10 +6,12 @@ const { handleDocumentRoutes } = require('./routes/documents');
 const { handleAnalyticsRoutes } = require('./routes/analytics');
 const { setupWebSocket } = require('./websocket/websocket');
 
-const MONGODB_URI = 'mongodb://localhost:27017/collaborative_editor';
+const MONGODB_URI = 'mongodb://localhost:27017';
+const DB_NAME = 'collaborative_editor';
 let db;
 
 const server = http.createServer(async (req, res) => {
+    // CORS头设置
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -27,13 +29,16 @@ const server = http.createServer(async (req, res) => {
             await handleDocumentRoutes(req, res, db);
         } else if (req.url.startsWith('/api/analytics')) {
             await handleAnalyticsRoutes(req, res, db);
+        } else if (req.url === '/api/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
         } else {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 status: 'online', 
                 message: 'Collaborative Editor API',
-                version: '1.0.0',
-                endpoints: ['/api/auth', '/api/documents', '/api/analytics']
+                version: '2.0.0',
+                endpoints: ['/api/auth', '/api/documents', '/api/analytics', '/api/health']
             }));
         }
     } catch (error) {
@@ -47,8 +52,14 @@ async function initializeServer() {
     try {
         const client = new MongoClient(MONGODB_URI);
         await client.connect();
-        db = client.db();
+        db = client.db(DB_NAME);
         console.log('✅ Connected to MongoDB');
+        
+        // 创建索引
+        await db.collection('users').createIndex({ email: 1 }, { unique: true });
+        await db.collection('documents').createIndex({ ownerId: 1 });
+        await db.collection('documents').createIndex({ updatedAt: -1 });
+        await db.collection('templates').createIndex({ ownerId: 1 });
         
         const wss = new WebSocket.Server({ server });
         setupWebSocket(wss, db);
