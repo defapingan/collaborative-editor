@@ -3,15 +3,22 @@ const { ObjectId } = require('mongodb');
 
 function setupWebSocket(wss, db) {
     const documentClients = new Map(); // documentId -> Map of userId -> { ws, userName, lastSeen }
+    // 【修改】改为追踪每个用户加入了哪些文档：userId -> Set of documentId
+    const userDocuments = new Map();
     
     // 心跳检测：每30秒检查一次
     const heartbeatInterval = setInterval(() => {
         const now = Date.now();
+        
         for (const [docId, userMap] of documentClients.entries()) {
             for (const [userId, userInfo] of userMap.entries()) {
                 if (now - userInfo.lastSeen > 45000) {
                     console.log(`User ${userId} timed out in document ${docId}`);
                     userMap.delete(userId);
+                    
+                    // 【修改】从用户文档列表中移除
+                    removeUserFromDocument(userId, docId, userDocuments);
+                    
                     broadcastToDocumentClients(docId, documentClients, null, {
                         type: 'user-left',
                         userId: userId,
@@ -19,6 +26,9 @@ function setupWebSocket(wss, db) {
                         documentId: docId,
                         timestamp: now
                     });
+                    
+                    // 【新增】检查用户是否还有其他文档在线
+                    checkAndBroadcastGlobalStatus(userId, userInfo.userName, userDocuments, wss);
                 }
             }
             if (userMap.size === 0) {
@@ -48,6 +58,7 @@ function setupWebSocket(wss, db) {
                         currentUserName = data.userName || 'User';
                         ws.userId = data.userId;
                         ws.userName = currentUserName;
+                        
                         console.log(`🔐 User authenticated: ${currentUserId} (${currentUserName})`);
                         ws.send(JSON.stringify({ type: 'auth-success', userId: data.userId }));
                         break;
@@ -55,7 +66,7 @@ function setupWebSocket(wss, db) {
                     case 'join-document':
                         try {
                             console.log(`📝 Joining document: ${data.documentId}, user: ${data.userId}`);
-                            await handleJoinDocument(ws, data, documentClients, db);
+                            await handleJoinDocument(ws, data, documentClients, db, userDocuments, wss);
                             currentDocumentId = data.documentId;
                             currentUserId = data.userId;
                             currentUserName = data.userName || 'User';
@@ -87,12 +98,12 @@ function setupWebSocket(wss, db) {
                             if (userMap.has(currentUserId)) {
                                 userMap.get(currentUserId).lastSeen = Date.now();
                             }
-                            ws.send(JSON.stringify({ type: 'heartbeat-ack', timestamp: Date.now() }));
                         }
+                        ws.send(JSON.stringify({ type: 'heartbeat-ack', timestamp: Date.now() }));
                         break;
                         
                     case 'leave-document':
-                        handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients);
+                        handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients, userDocuments, wss);
                         currentDocumentId = null;
                         break;
                         
@@ -108,7 +119,7 @@ function setupWebSocket(wss, db) {
         ws.on('close', (code, reason) => {
             console.log(`🔌 WebSocket connection closed for user: ${currentUserId}, code: ${code}, reason: ${reason || 'no reason'}`);
             if (currentDocumentId && currentUserId) {
-                handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients);
+                handleLeaveDocument(ws, currentDocumentId, currentUserId, documentClients, userDocuments, wss);
             }
         });
         
@@ -122,7 +133,45 @@ function setupWebSocket(wss, db) {
     });
 }
 
-async function handleJoinDocument(ws, data, documentClients, db) {
+// 【新增】将用户从文档中移除，并检查是否需要广播离线
+function removeUserFromDocument(userId, documentId, userDocuments) {
+    if (userDocuments.has(userId)) {
+        userDocuments.get(userId).delete(documentId);
+        if (userDocuments.get(userId).size === 0) {
+            userDocuments.delete(userId);
+        }
+    }
+}
+
+// 【新增】检查用户是否完全没有文档在线，如果有变化则广播
+function checkAndBroadcastGlobalStatus(userId, userName, userDocuments, wss) {
+    const hasDocuments = userDocuments.has(userId) && userDocuments.get(userId).size > 0;
+    
+    if (!hasDocuments) {
+        // 用户完全离线（没有任何文档在线），广播离线消息
+        console.log(`🔴 User completely offline: ${userId} (${userName})`);
+        broadcastToAllClients(wss, {
+            type: 'user-offline',
+            userId: userId,
+            userName: userName,
+            timestamp: Date.now()
+        });
+        userDocuments.delete(userId);
+    }
+}
+
+// 【新增】广播给所有连接的客户端
+function broadcastToAllClients(wss, message) {
+    const messageStr = JSON.stringify(message);
+    wss.clients.forEach((client) => {
+        if (client.readyState === client.OPEN) {
+            client.send(messageStr);
+        }
+    });
+    console.log(`📡 Global broadcast: ${message.type} for user ${message.userName} (${message.userId})`);
+}
+
+async function handleJoinDocument(ws, data, documentClients, db, userDocuments, wss) {
     const { documentId, userId, userName } = data;
     
     // 验证 documentId 是否有效
@@ -131,6 +180,9 @@ async function handleJoinDocument(ws, data, documentClients, db) {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid document ID' }));
         return;
     }
+    
+    // 【新增】检查是否是用户加入的第一个文档
+    const isFirstDocument = !userDocuments.has(userId) || userDocuments.get(userId).size === 0;
     
     if (!documentClients.has(documentId)) {
         documentClients.set(documentId, new Map());
@@ -146,6 +198,12 @@ async function handleJoinDocument(ws, data, documentClients, db) {
     
     ws.userId = userId;
     ws.userName = userName || 'User';
+    
+    // 【新增】记录用户加入的文档
+    if (!userDocuments.has(userId)) {
+        userDocuments.set(userId, new Set());
+    }
+    userDocuments.get(userId).add(documentId);
     
     // 获取文档内容
     try {
@@ -167,7 +225,7 @@ async function handleJoinDocument(ws, data, documentClients, db) {
         ws.send(JSON.stringify({ type: 'error', message: 'Failed to fetch document' }));
     }
     
-    // 通知其他用户有新用户加入
+    // 通知文档内其他用户有新用户加入
     broadcastToDocumentClients(documentId, documentClients, ws, {
         type: 'user-joined',
         userId: userId,
@@ -175,6 +233,17 @@ async function handleJoinDocument(ws, data, documentClients, db) {
         documentId: documentId,
         timestamp: Date.now()
     });
+    
+    // 【新增】如果这是用户的第一个文档，全局广播上线
+    if (isFirstDocument) {
+        console.log(`🟢 User came online (first document): ${userId} (${userName})`);
+        broadcastToAllClients(wss, {
+            type: 'user-online',
+            userId: userId,
+            userName: userName || 'User',
+            timestamp: Date.now()
+        });
+    }
     
     // 发送当前用户列表给新用户
     const users = Array.from(userMap.entries())
@@ -187,7 +256,7 @@ async function handleJoinDocument(ws, data, documentClients, db) {
         documentId: documentId
     }));
     
-    console.log(`✅ Client ${userName} (${userId}) joined document: ${documentId}, total users: ${userMap.size}, online users: ${users.map(u => u.userName).join(', ') || 'none'}`);
+    console.log(`✅ Client ${userName} (${userId}) joined document: ${documentId}, total users: ${userMap.size}`);
 }
 
 async function handleTextUpdate(ws, data, documentClients, db) {
@@ -222,29 +291,44 @@ async function handleTextUpdate(ws, data, documentClients, db) {
     });
 }
 
-function handleLeaveDocument(ws, documentId, userId, documentClients) {
-    if (documentId && documentClients.has(documentId)) {
-        const userMap = documentClients.get(documentId);
-        const userInfo = userMap.get(userId);
-        const userName = userInfo?.userName || 'User';
-        
-        userMap.delete(userId);
-        
-        // 通知其他用户
-        broadcastToDocumentClients(documentId, documentClients, null, {
-            type: 'user-left',
+function handleLeaveDocument(ws, documentId, userId, documentClients, userDocuments, wss) {
+    if (!documentId || !documentClients.has(documentId)) return;
+    
+    const userMap = documentClients.get(documentId);
+    const userInfo = userMap.get(userId);
+    const userName = userInfo?.userName || 'User';
+    
+    userMap.delete(userId);
+    
+    // 通知文档内其他用户
+    broadcastToDocumentClients(documentId, documentClients, null, {
+        type: 'user-left',
+        userId: userId,
+        userName: userName,
+        documentId: documentId,
+        timestamp: Date.now()
+    });
+    
+    if (userMap.size === 0) {
+        documentClients.delete(documentId);
+    }
+    
+    // 【修改】从用户文档列表中移除
+    removeUserFromDocument(userId, documentId, userDocuments);
+    
+    // 【新增】检查用户是否完全离线
+    const hasDocuments = userDocuments.has(userId) && userDocuments.get(userId).size > 0;
+    if (!hasDocuments) {
+        console.log(`🔴 User completely offline: ${userId} (${userName})`);
+        broadcastToAllClients(wss, {
+            type: 'user-offline',
             userId: userId,
             userName: userName,
-            documentId: documentId,
             timestamp: Date.now()
         });
-        
-        if (userMap.size === 0) {
-            documentClients.delete(documentId);
-        }
-        
-        console.log(`👋 User ${userName} (${userId}) left document: ${documentId}, remaining users: ${userMap.size}`);
     }
+    
+    console.log(`👋 User ${userName} (${userId}) left document: ${documentId}, remaining users: ${userMap.size}, still online: ${hasDocuments}`);
 }
 
 function broadcastToDocumentClients(documentId, documentClients, senderWs, message) {

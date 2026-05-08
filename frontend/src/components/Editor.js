@@ -64,12 +64,16 @@ function Editor() {
       setContent('');
     }
     
+    // 【关键修复】组件卸载时清理 WebSocket
     return () => {
+      console.log('Editor unmounting, cleaning up WebSocket...');
       if (heartbeatIntervalRef.current) {
         clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
       }
       if (websocketService.isConnected()) {
         websocketService.disconnect();
+        console.log('WebSocket disconnected on editor unmount');
       }
     };
   }, [id]);
@@ -78,6 +82,7 @@ function Editor() {
   useEffect(() => {
     if (!id || loading || !user.id) return;
     
+    console.log('Editor: Connecting WebSocket for document:', id);
     websocketService.connect(id, user.id, user.name || user.email?.split('@')[0] || 'User');
     
     if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);

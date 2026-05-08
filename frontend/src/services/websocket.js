@@ -3,6 +3,7 @@ class WebSocketService {
         this.socket = null;
         this.documentId = null;
         this.userId = null;
+        this.userName = null;
         this.messageHandlers = new Map();
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
@@ -33,13 +34,16 @@ class WebSocketService {
             // 发送认证信息
             this.send({
                 type: 'auth',
-                userId: this.userId
+                userId: this.userId,
+                userName: this.userName
             });
             
-            // 加入文档
-            setTimeout(() => {
-                this.joinDocument();
-            }, 100);
+            // 如果有 documentId，加入文档
+            if (this.documentId) {
+                setTimeout(() => {
+                    this.joinDocument();
+                }, 100);
+            }
         };
         
         this.socket.onmessage = (event) => {
@@ -109,6 +113,13 @@ class WebSocketService {
         }
     }
     
+    // 【新增】发送心跳
+    sendHeartbeat() {
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+            this.send({ type: 'heartbeat' });
+        }
+    }
+    
     send(message) {
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
             this.socket.send(JSON.stringify(message));
@@ -170,6 +181,7 @@ class WebSocketService {
         this.messageHandlers.clear();
         this.documentId = null;
         this.userId = null;
+        this.userName = null;
         this.isConnecting = false;
     }
     

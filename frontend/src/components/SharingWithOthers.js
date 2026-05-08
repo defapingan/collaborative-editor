@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Paper, Typography, Chip, Card, CardContent,
   CardActions, Button, Avatar, IconButton,
@@ -34,88 +34,81 @@ const SharingWithOthers = () => {
   const [inviteRole, setInviteRole] = useState('editor');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   
-  // 存储每个文档中每个用户的在线状态
-  // 结构: { [documentId]: { [userId]: boolean } }
-  const [onlineUsersByDoc, setOnlineUsersByDoc] = useState({});
+  // 存储全局在线用户：{ [userId]: boolean }
+  const [onlineUsers, setOnlineUsers] = useState({});
   
   // 踢出确认对话框状态
   const [kickDialogOpen, setKickDialogOpen] = useState(false);
   const [kickTarget, setKickTarget] = useState(null);
+  
+  // 用于防止重复连接
+  const hasConnectedRef = useRef(false);
 
   useEffect(() => {
     fetchSharingDocuments();
     
-    // 获取当前用户信息
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     
-    // 建立 WebSocket 连接（不加入特定文档，只用于监听全局消息）
-    if (user.id && !websocketService.isConnected()) {
-      console.log('🔌 SharingWithOthers: Establishing WebSocket connection...');
-      // 连接但不加入文档，只用于监听 user-joined/user-left 消息
+    // 【修改】只在尚未连接时建立连接（不加入文档，不发心跳）
+    if (user.id && !websocketService.isConnected() && !hasConnectedRef.current) {
+      hasConnectedRef.current = true;
+      console.log('🔌 SharingWithOthers: Establishing WebSocket connection (no document join)...');
+      // 连接但不加入文档，不发 join-document，因此不会触发 user-online 广播
       websocketService.connect(null, user.id, user.name || user.email?.split('@')[0] || 'User');
     }
     
-    // 监听 WebSocket 用户状态变化
+    // 如果已经连接但没加入文档，则静默保持（不做任何操作）
+    if (user.id && websocketService.isConnected()) {
+      console.log('🔌 SharingWithOthers: WebSocket already connected, listening only...');
+    }
+    
+    // 监听全局用户上线（只有进入编辑器时才触发）
+    const handleUserOnline = (message) => {
+      console.log('🟢 SharingWithOthers received user-online:', message);
+      setOnlineUsers(prev => ({
+        ...prev,
+        [message.userId]: true
+      }));
+    };
+    
+    // 监听全局用户下线（离开所有编辑器时触发）
+    const handleUserOffline = (message) => {
+      console.log('🔴 SharingWithOthers received user-offline:', message);
+      setOnlineUsers(prev => ({
+        ...prev,
+        [message.userId]: false
+      }));
+    };
+    
+    // 【新增】也监听文档级别的 user-joined/user-left（当用户在 Editor 中时）
     const handleUserJoined = (message) => {
-      console.log('🔵 SharingWithOthers received user-joined:', message);
-      const { documentId, userId, userName } = message;
-      if (documentId) {
-        setOnlineUsersByDoc(prev => {
-          const newState = {
-            ...prev,
-            [documentId]: {
-              ...(prev[documentId] || {}),
-              [userId]: true
-            }
-          };
-          console.log('📊 Updated onlineUsersByDoc (user-joined):', newState);
-          return newState;
-        });
-      }
+      console.log('📄 SharingWithOthers received user-joined:', message);
+      setOnlineUsers(prev => ({
+        ...prev,
+        [message.userId]: true
+      }));
     };
     
     const handleUserLeft = (message) => {
-      console.log('🔴 SharingWithOthers received user-left:', message);
-      const { documentId, userId } = message;
-      if (documentId) {
-        setOnlineUsersByDoc(prev => {
-          const newState = {
-            ...prev,
-            [documentId]: {
-              ...(prev[documentId] || {}),
-              [userId]: false
-            }
-          };
-          console.log('📊 Updated onlineUsersByDoc (user-left):', newState);
-          return newState;
-        });
-      }
+      console.log('📄 SharingWithOthers received user-left:', message);
+      setOnlineUsers(prev => ({
+        ...prev,
+        [message.userId]: false
+      }));
     };
     
-    // 监听 document 事件，以便知道哪些文档有活动
-    const handleDocumentContent = (message) => {
-      console.log('📄 SharingWithOthers received document-content:', message);
-      // 可以用来更新文档信息
-    };
-    
+    websocketService.on('user-online', handleUserOnline);
+    websocketService.on('user-offline', handleUserOffline);
     websocketService.on('user-joined', handleUserJoined);
     websocketService.on('user-left', handleUserLeft);
-    websocketService.on('document-content', handleDocumentContent);
-    
-    // 每5秒检查一次 WebSocket 连接状态并尝试重连
-    const connectionCheckInterval = setInterval(() => {
-      if (user.id && !websocketService.isConnected()) {
-        console.log('🔄 SharingWithOthers: WebSocket disconnected, reconnecting...');
-        websocketService.connect(null, user.id, user.name || user.email?.split('@')[0] || 'User');
-      }
-    }, 10000);
     
     return () => {
+      websocketService.off('user-online', handleUserOnline);
+      websocketService.off('user-offline', handleUserOffline);
       websocketService.off('user-joined', handleUserJoined);
       websocketService.off('user-left', handleUserLeft);
-      websocketService.off('document-content', handleDocumentContent);
-      clearInterval(connectionCheckInterval);
-      // 注意：不要断开连接，因为其他组件可能还在用
+      // 【重要】不调用 disconnect()，因为连接可能被 Editor 等其他组件使用
+      hasConnectedRef.current = false;
     };
   }, []);
 
@@ -133,11 +126,9 @@ const SharingWithOthers = () => {
     }
   };
 
-  // 检查特定文档中的特定用户是否在线
-  const isUserOnlineInDocument = (documentId, userId) => {
-    const isOnline = onlineUsersByDoc[documentId]?.[userId] === true;
-    console.log(`🔍 Checking online status - doc:${documentId}, user:${userId}, online:${isOnline}`);
-    return isOnline;
+  // 检查特定用户是否在线（是否在某个文档编辑器中）
+  const isUserOnline = (userId) => {
+    return onlineUsers[userId] === true;
   };
 
   // 打开踢出确认对话框
@@ -208,25 +199,24 @@ const SharingWithOthers = () => {
     setSnackbar({ ...snackbar, open: false });
   };
 
-  const getStatusIcon = (status, documentId, userId) => {
+  const getStatusIcon = (status, userId) => {
     if (status !== 'active') {
       return <InactiveIcon sx={{ color: '#ef4444', fontSize: 16 }} />;
     }
-    // 检查该用户在该文档中是否在线
-    const online = isUserOnlineInDocument(documentId, userId);
+    const online = isUserOnline(userId);
     return online ? 
       <CircleIcon sx={{ color: '#10b981', fontSize: 12 }} /> : 
       <CircleIcon sx={{ color: '#9ca3af', fontSize: 12 }} />;
   };
 
-  const getStatusText = (status, documentId, userId) => {
+  const getStatusText = (status, userId) => {
     if (status !== 'active') return status.toUpperCase();
-    return isUserOnlineInDocument(documentId, userId) ? 'ONLINE' : 'OFFLINE';
+    return isUserOnline(userId) ? 'ONLINE' : 'OFFLINE';
   };
 
-  const getStatusColor = (status, documentId, userId) => {
+  const getStatusColor = (status, userId) => {
     if (status !== 'active') return '#ef4444';
-    return isUserOnlineInDocument(documentId, userId) ? '#10b981' : '#9ca3af';
+    return isUserOnline(userId) ? '#10b981' : '#9ca3af';
   };
 
   const getRoleIcon = (role) => {
@@ -260,7 +250,7 @@ const SharingWithOthers = () => {
               Documents You're Sharing
             </Typography>
             <Typography variant="body1" color="#475569">
-              Manage collaborators and control access permissions. Green dot indicates user is currently online in this document.
+              Manage collaborators and control access permissions. Green dot indicates user is currently editing a document.
             </Typography>
           </Box>
         </Box>
@@ -338,16 +328,16 @@ const SharingWithOthers = () => {
                                 {collab.email}
                               </Typography>
                               <Box display="flex" alignItems="center" gap={0.5}>
-                                {getStatusIcon(collab.status, doc._id, collab.userId)}
+                                {getStatusIcon(collab.status, collab.userId)}
                                 <Typography 
                                   variant="caption" 
                                   sx={{ 
-                                    color: getStatusColor(collab.status, doc._id, collab.userId),
+                                    color: getStatusColor(collab.status, collab.userId),
                                     fontWeight: 500,
                                     minWidth: 60
                                   }}
                                 >
-                                  {getStatusText(collab.status, doc._id, collab.userId)}
+                                  {getStatusText(collab.status, collab.userId)}
                                 </Typography>
                               </Box>
                               {getRoleIcon(collab.role)}
