@@ -1,0 +1,101 @@
+config:
+  target: "http://localhost:3001"
+  phases:
+    - duration: 60      # 测试持续60秒
+      arrivalRate: 5    # 每秒新增5个虚拟用户
+      rampTo: 20        # 逐渐增加到20个用户
+    - duration: 120
+      arrivalRate: 20   # 保持20个用户120秒
+    - duration: 30
+      arrivalRate: 0    # 逐渐减少到0
+  payload:
+    path: "users.csv"
+    fields:
+      - "email"
+      - "password"
+  processor: "./load-test-processor.js"
+
+scenarios:
+  - name: "Document CRUD Operations"
+    weight: 3
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            email: "{{ email }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.token"
+            as: "authToken"
+          headers:
+            Content-Type: "application/json"
+      
+      - post:
+          url: "/api/documents"
+          json:
+            title: "Load Test Document {{ $randomNumber(1, 1000) }}"
+            content: "This is a test document for load testing."
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          capture:
+            json: "$.id"
+            as: "docId"
+      
+      - get:
+          url: "/api/documents/{{ docId }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+      
+      - put:
+          url: "/api/documents/{{ docId }}"
+          json:
+            content: "Updated content at {{ $timestamp }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+      
+      - delete:
+          url: "/api/documents/{{ docId }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+  - name: "Get Documents List"
+    weight: 2
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            email: "{{ email }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.token"
+            as: "authToken"
+      
+      - get:
+          url: "/api/documents"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+  - name: "Real-time Collaboration Simulation"
+    weight: 1
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            email: "{{ email }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.token"
+            as: "authToken"
+      
+      - post:
+          url: "/api/documents"
+          json:
+            title: "Collaboration Test Doc"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          capture:
+            json: "$.id"
+            as: "docId"
+      
+      - function: "simulateWebSocketConnection"
+      - function: "simulateEditing"

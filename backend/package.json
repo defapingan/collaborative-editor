@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon --ignore tests/ server.js",
+    "test:load": "artillery run tests/load-test.yml",
+    "test:stress": "artillery run tests/stress-test.yml",
+    "test:all": "node tests/run-tests.js",
+    "test:perf": "artillery run --output tests/reports/perf-report.json tests/load-test.yml"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -13,6 +17,8 @@
     "ws": "^8.14.2"
   },
   "devDependencies": {
+    "artillery": "^2.0.31",
+    "axios": "^1.16.0",
     "nodemon": "^3.0.0"
   }
 }

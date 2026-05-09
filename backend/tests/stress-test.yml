@@ -1,0 +1,72 @@
+config:
+  target: "http://localhost:3001"
+  phases:
+    # 快速增加负载直到系统崩溃点
+    - name: "Ramp up to breaking point"
+      duration: 120
+      arrivalRate: 1
+      rampTo: 50
+    - name: "Sustained high load"
+      duration: 60
+      arrivalRate: 50
+      maxVusers: 100
+    - name: "Spike test"
+      duration: 30
+      arrivalRate: 0
+      spike:
+        - duration: 10
+          arrivalRate: 100
+  payload:
+    path: "users.csv"
+    fields:
+      - "email"
+      - "password"
+  ensure:
+    maxErrorRate: 5
+    thresholds:
+      - "http.response_time.p95": 1000
+      - "http.response_time.p99": 2000
+
+scenarios:
+  - name: "Concurrent Document Operations"
+    flow:
+      - log: "Starting stress test scenario"
+      - post:
+          url: "/api/auth/login"
+          json:
+            email: "{{ email }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.token"
+            as: "authToken"
+      
+      - think: 0.5
+      
+      - post:
+          url: "/api/documents"
+          json:
+            title: "Stress Test Doc {{ $randomNumber(1, 9999) }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          capture:
+            json: "$.id"
+            as: "docId"
+      
+      - loop:
+          - think: 1
+          - put:
+              url: "/api/documents/{{ docId }}"
+              json:
+                content: "Stress test update iteration {{ $loopCount }}"
+              headers:
+                Authorization: "Bearer {{ authToken }}"
+          - get:
+              url: "/api/documents"
+              headers:
+                Authorization: "Bearer {{ authToken }}"
+        count: 10
+      
+      - delete:
+          url: "/api/documents/{{ docId }}"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
